@@ -92,7 +92,9 @@ const validateProjectUpdate = [
     .isArray().withMessage('Members must be an array')
     .custom(async (value) => {
       if (!Array.isArray(value)) return;
-      for (const memberId of value) {\n        const user = await User.findById(memberId);
+      for (const memberId of value) {
+
+        const user = await User.findById(memberId);
         if (!user) throw new Error(`User with ID ${memberId} does not exist`);
       }
     }),

@@ -89,7 +89,7 @@ projectSchema.index({ title: 'text', description: 'text' });
 projectSchema.pre('save', function(next) {
   if (this.members && Array.isArray(this.members)) {
     this.members = [...new Set(this.members.map(id => id.toString()))];
-    this.members = this.members.map(id => mongoose.Types.ObjectId(id));
+    this.members = this.members.map(id => new mongoose.Types.ObjectId(id));
   }
   this.updatedAt = Date.now();
   next();
