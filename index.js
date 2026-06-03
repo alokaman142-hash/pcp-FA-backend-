@@ -3,7 +3,7 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const mongoose = require('mongoose');
-const apiRouter = require('./routes/api-spec');
+const apiRouter = require('./routes/api-enhanced');
 
 const app = express();
 const PORT = process.env.PORT || 4000;

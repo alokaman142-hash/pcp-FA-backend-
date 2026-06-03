@@ -1,9 +1,6 @@
 const express = require('express');
 const axios = require('axios');
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { body, validationResult } = require('express-validator');
-const validator = require('validator');
 const { authenticate, authorize } = require('../middleware/auth');
 const User = require('../models/User');
 const Project = require('../models/Project');
@@ -22,7 +19,6 @@ const {
   validatePaginationParams,
   validateAssignIssue,
   validateChangeIssueStatus,
-  handleValidationErrors,
 } = require('../middleware/validation');
 
 const router = express.Router();
@@ -40,6 +36,7 @@ const errorResponse = (res, message, status = 500) => {
 
 const generateId = (prefix) => `${prefix}${Date.now().toString().slice(-8)}`;
 
+// HEALTH ENDPOINT
 router.get('/health', async (req, res) => {
   try {
     const documentCount = await mongoose.connection.db.collection('users').countDocuments();
@@ -52,6 +49,7 @@ router.get('/health', async (req, res) => {
   }
 });
 
+// AUTHENTICATION ENDPOINTS
 router.post('/auth/register', validateUserRegistration, async (req, res) => {
   try {
     const { name, email, password } = req.body;
@@ -93,6 +91,7 @@ router.get('/auth/me', authenticate, async (req, res) => {
   }
 });
 
+// SYNC ENDPOINT
 router.post('/sync', authenticate, authorize('admin'), async (req, res) => {
   try {
     const loginRes = await axios.post('https://t4e-testserver.onrender.com/api/login', {
@@ -127,7 +126,7 @@ router.post('/sync', authenticate, authorize('admin'), async (req, res) => {
           rejected++;
           continue;
         }
-        await Issue.create({
+        await PersistenceManager.validateAndPersistIssue({
           issueId: item.issueId,
           title: item.title,
           description: item.description || '',
@@ -155,10 +154,19 @@ router.post('/sync', authenticate, authorize('admin'), async (req, res) => {
   }
 });
 
-router.get('/users', authenticate, async (req, res) => {
+// USER ENDPOINTS
+router.get('/users', authenticate, validatePaginationParams, async (req, res) => {
   try {
-    const users = await User.find().sort({ createdAt: -1 });
-    return successResponse(res, 'Users fetched successfully', users, 200, { total: users.length });
+    const { page = 1, limit = 10 } = req.query;
+    const skip = (page - 1) * limit;
+    const total = await User.countDocuments();
+    const users = await User.find().skip(skip).limit(parseInt(limit)).sort({ createdAt: -1 });
+    return successResponse(res, 'Users fetched successfully', users, 200, {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total,
+      totalPages: Math.ceil(total / limit),
+    });
   } catch (err) {
     return errorResponse(res, err.message);
   }
@@ -174,6 +182,7 @@ router.get('/users/:userId', authenticate, async (req, res) => {
   }
 });
 
+// PROJECT ENDPOINTS
 router.post('/projects', authenticate, authorize('admin', 'manager'), validateProjectCreation, async (req, res) => {
   try {
     const { title, category, description, members } = req.body;
@@ -248,26 +257,24 @@ router.patch('/projects/:projectId', authenticate, authorize('admin', 'manager')
 
 router.delete('/projects/:projectId', authenticate, authorize('admin'), async (req, res) => {
   try {
-    await PersistenceManager.deleteProjectCascade(
-      (await Project.findOne({ projectId: req.params.projectId }))._id
-    );
+    const project = await Project.findOne({ projectId: req.params.projectId });
+    if (!project) return errorResponse(res, 'Project not found', 404);
+    await PersistenceManager.deleteProjectCascade(project._id);
     return successResponse(res, 'Project deleted successfully', { projectId: req.params.projectId });
   } catch (err) {
     return errorResponse(res, err.message);
   }
 });
 
-router.post('/issues', authenticate, [
-  body('title').trim().isLength({ min: 2 }),
-  body('projectId').trim(),
-], handleValidation, async (req, res) => {
+// ISSUE ENDPOINTS
+router.post('/issues', authenticate, validateIssueCreation, async (req, res) => {
   try {
     const { title, description, projectId, priority, severity, assignedTo } = req.body;
     const project = await Project.findOne({ projectId });
     if (!project) return errorResponse(res, 'Project not found', 404);
     
     const issueId = generateId('ISS');
-    const issue = await Issue.create({
+    const issue = await PersistenceManager.validateAndPersistIssue({
       issueId,
       title,
       description: description || '',
@@ -280,11 +287,11 @@ router.post('/issues', authenticate, [
     await issue.populate('project').populate('assignedTo').populate('reportedBy');
     return successResponse(res, 'Issue created successfully', issue, 201);
   } catch (err) {
-    return errorResponse(res, err.message);
+    return errorResponse(res, err.message, 500);
   }
 });
 
-router.get('/issues', authenticate, async (req, res) => {
+router.get('/issues', authenticate, validatePaginationParams, async (req, res) => {
   try {
     const { status, priority, severity, search, page = 1, limit = 10 } = req.query;
     let filter = {};
@@ -318,22 +325,23 @@ router.get('/issues/:issueId', authenticate, async (req, res) => {
   }
 });
 
-router.patch('/issues/:issueId', authenticate, async (req, res) => {
+router.patch('/issues/:issueId', authenticate, validateIssueUpdate, async (req, res) => {
   try {
-    const { title, description, priority, severity } = req.body;
     const issue = await Issue.findOne({ issueId: req.params.issueId });
     if (!issue) return errorResponse(res, 'Issue not found', 404);
     
+    const { title, description, priority, severity, status } = req.body;
     if (title) issue.title = title;
     if (description !== undefined) issue.description = description;
     if (priority) issue.priority = priority;
     if (severity) issue.severity = severity;
+    if (status) issue.status = status;
     
     await issue.save();
     await issue.populate('project').populate('assignedTo').populate('reportedBy');
     return successResponse(res, 'Issue updated successfully', issue);
   } catch (err) {
-    return errorResponse(res, err.message);
+    return errorResponse(res, err.message, 500);
   }
 });
 
@@ -341,13 +349,15 @@ router.delete('/issues/:issueId', authenticate, authorize('admin'), async (req, 
   try {
     const issue = await Issue.findOneAndDelete({ issueId: req.params.issueId });
     if (!issue) return errorResponse(res, 'Issue not found', 404);
+    await Comment.deleteMany({ issue: issue._id });
     return successResponse(res, 'Issue deleted successfully', issue);
   } catch (err) {
     return errorResponse(res, err.message);
   }
 });
 
-router.patch('/issues/:issueId/assign', authenticate, authorize('admin', 'manager'), async (req, res) => {
+// ISSUE WORKFLOW ENDPOINTS
+router.patch('/issues/:issueId/assign', authenticate, authorize('admin', 'manager'), validateAssignIssue, async (req, res) => {
   try {
     const { userId } = req.body;
     const issue = await Issue.findOne({ issueId: req.params.issueId });
@@ -356,8 +366,7 @@ router.patch('/issues/:issueId/assign', authenticate, authorize('admin', 'manage
     const user = await User.findOne({ userId });
     if (!user) return errorResponse(res, 'User not found', 404);
     
-    issue.assignedTo = user._id;
-    await issue.save();
+    await PersistenceManager.assignIssueToUser(issue._id, user._id);
     await issue.populate('project').populate('assignedTo').populate('reportedBy');
     return successResponse(res, 'Issue assigned successfully', issue);
   } catch (err) {
@@ -365,19 +374,17 @@ router.patch('/issues/:issueId/assign', authenticate, authorize('admin', 'manage
   }
 });
 
-router.patch('/issues/:issueId/status', authenticate, async (req, res) => {
+router.patch('/issues/:issueId/status', authenticate, validateChangeIssueStatus, async (req, res) => {
   try {
     const { newStatus } = req.body;
     const issue = await Issue.findOne({ issueId: req.params.issueId });
     if (!issue) return errorResponse(res, 'Issue not found', 404);
     
-    const previousStatus = issue.status;
-    issue.status = newStatus;
-    await issue.save();
+    await issue.changeStatus(newStatus, req.user.id);
+    await issue.populate('project').populate('assignedTo').populate('reportedBy');
     
     return successResponse(res, 'Issue status updated successfully', {
       issueId: issue.issueId,
-      previousStatus,
       newStatus: issue.status,
     });
   } catch (err) {
@@ -385,17 +392,15 @@ router.patch('/issues/:issueId/status', authenticate, async (req, res) => {
   }
 });
 
-router.post('/comments', authenticate, [
-  body('issueId').trim(),
-  body('message').trim().isLength({ min: 1 }),
-], handleValidation, async (req, res) => {
+// COMMENT ENDPOINTS
+router.post('/comments', authenticate, validateCommentCreation, async (req, res) => {
   try {
     const { issueId, message } = req.body;
     const issue = await Issue.findOne({ issueId });
     if (!issue) return errorResponse(res, 'Issue not found', 404);
     
     const commentId = generateId('COM');
-    const comment = await Comment.create({
+    const comment = await PersistenceManager.validateAndPersistComment({
       commentId,
       issue: issue._id,
       user: req.user.id,
@@ -404,11 +409,11 @@ router.post('/comments', authenticate, [
     await comment.populate('issue').populate('user');
     return successResponse(res, 'Comment added successfully', comment, 201);
   } catch (err) {
-    return errorResponse(res, err.message);
+    return errorResponse(res, err.message, 500);
   }
 });
 
-router.get('/comments', authenticate, async (req, res) => {
+router.get('/comments', authenticate, validatePaginationParams, async (req, res) => {
   try {
     const { issueId, search, page = 1, limit = 10 } = req.query;
     let filter = {};
@@ -453,6 +458,7 @@ router.delete('/comments/:commentId', authenticate, async (req, res) => {
   }
 });
 
+// ANALYTICS ENDPOINTS
 router.get('/analytics/issues', authenticate, async (req, res) => {
   try {
     const totalIssues = await Issue.countDocuments();
