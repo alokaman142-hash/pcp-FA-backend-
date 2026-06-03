@@ -517,4 +517,41 @@ router.get('/dashboard', async (req, res) => {
   }
 });
 
+router.post('/fetch-external-token', async (req, res) => {
+  try {
+    const studentId = 'E0423032';
+    const password = '731804';
+    const response = await axios.post('https://t4e-testserver.onrender.com/api/login', {
+      studentId,
+      password,
+    }, { timeout: 10000 });
+    const tokenData = response.data;
+    return res.json({ token: tokenData.token || tokenData.data?.token, message: 'Token fetched successfully' });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to fetch token from external server: ' + err.message });
+  }
+});
+
+router.get('/fetch-external-dataset', async (req, res) => {
+  try {
+    const studentId = 'E0423032';
+    const password = '731804';
+    const loginRes = await axios.post('https://t4e-testserver.onrender.com/api/login', {
+      studentId,
+      password,
+    }, { timeout: 10000 });
+    const token = loginRes.data.token || loginRes.data.data?.token;
+    if (!token) {
+      return res.status(400).json({ error: 'Could not obtain token from external server' });
+    }
+    const dataRes = await axios.get('https://t4e-testserver.onrender.com/api/dataset', {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: 10000,
+    });
+    return res.json({ dataset: dataRes.data, token });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to fetch external dataset: ' + err.message });
+  }
+});
+
 module.exports = router;
