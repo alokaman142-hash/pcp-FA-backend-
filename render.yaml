@@ -1,0 +1,13 @@
+services:
+  - type: web_service
+    name: issue-tracker-backend
+    env: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: MONGO_URI
+        value: ''
+      - key: JWT_SECRET
+        value: ''
+    branch: main
