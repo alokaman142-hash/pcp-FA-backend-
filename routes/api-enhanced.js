@@ -36,6 +36,16 @@ const errorResponse = (res, message, status = 500) => {
 
 const generateId = (prefix) => `${prefix}${Date.now().toString().slice(-8)}`;
 
+// ROOT API ENDPOINT
+router.get('/', async (req, res) => {
+  return successResponse(res, 'Issue Tracker API is running', {
+    version: '1.0.0',
+    endpoints: 26,
+    status: 'operational',
+    features: ['authentication', 'projects', 'issues', 'comments', 'analytics'],
+  });
+});
+
 // HEALTH ENDPOINT
 router.get('/health', async (req, res) => {
   try {
