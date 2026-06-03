@@ -3,7 +3,7 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const mongoose = require('mongoose');
-const apiRouter = require('./routes/api');
+const apiRouter = require('./routes/api-spec');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -15,7 +15,7 @@ app.use(express.json());
 app.use('/api', apiRouter);
 
 app.get('/', (req, res) => {
-  res.send({ status: 'Issue tracker backend is running' });
+  res.json({ status: 'Issue tracker backend is running' });
 });
 
 mongoose
